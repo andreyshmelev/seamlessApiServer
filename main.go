@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+
+	api "seamlessServer/seamlessApi"
 )
 
 func main() {
@@ -17,4 +19,5 @@ func main() {
 
 	fmt.Fprintln(out, "init git repo*****", str, "\n")
 
+	api.NewServer()
 }
