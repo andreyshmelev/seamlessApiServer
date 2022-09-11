@@ -49,8 +49,9 @@ type chargeFreerounds int
 type roundId string
 
 type userBalancesContainer struct {
-	mutx         sync.Mutex
-	userBalances map[callerId]balance
+	mutx                sync.Mutex
+	userBalances        map[callerId]balance
+	transactionRefsList map[callerId][]string
 }
 
 var uB userBalancesContainer
@@ -177,7 +178,7 @@ func GetBalance(wd *getBalanceRpc) balance {
 	return b
 }
 
-func WithdrawAndDeposit(wd *withdrawAndDepositRpc) balance {
+func WithdrawAndDeposit(wd *withdrawAndDepositRpc) (b balance, error string) {
 
 	if _, ok := uB.userBalances[wd.Params.CallerId]; !ok {
 		randBal := rand.Intn(300) * 100
@@ -187,7 +188,7 @@ func WithdrawAndDeposit(wd *withdrawAndDepositRpc) balance {
 	//wd.Params.CallerId
 	b, err := uB.updBalance(wd.Params.CallerId, wd.Params.Withdraw, wd.Params.Deposit)
 	fmt.Println("WithdrawAndDeposit ", wd, b, err)
-	return b
+	return b, "false"
 }
 
 func RollbackTransaction(rb *rollbackTransactionRpc) int {
@@ -197,7 +198,8 @@ func RollbackTransaction(rb *rollbackTransactionRpc) int {
 func NewServer() {
 
 	uB = userBalancesContainer{
-		userBalances: make(map[callerId]balance),
+		userBalances:        make(map[callerId]balance),
+		transactionRefsList: make(map[callerId][]string),
 	}
 
 	mux := http.NewServeMux()
