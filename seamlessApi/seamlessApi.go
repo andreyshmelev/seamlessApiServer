@@ -3,6 +3,7 @@ package seamlessApi
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
@@ -54,19 +55,19 @@ type userBalancesContainer struct {
 
 var uB userBalancesContainer
 
-func (c *userBalancesContainer) updBalance(cId callerId, w withdraw, d deposit) (err bool) {
+func (c *userBalancesContainer) updBalance(cId callerId, w withdraw, d deposit) (b balance, err bool) {
 	c.mutx.Lock()
 	defer c.mutx.Unlock()
 
 	if (c.userBalances[cId]) >= balance(w) {
 		c.userBalances[cId] -= balance(w)
 		c.userBalances[cId] += balance(d)
-		return false
+		return b, false
 
 	}
 
 	c.userBalances[cId] = 0
-	return true
+	return 0, true
 }
 
 func (c *userBalancesContainer) getUserBalance(cId callerId) (callerId, balance, bool) {
@@ -87,11 +88,62 @@ type getBalanceParams struct {
 	SessionAlternativeId sessionAlternativeId
 	BonusId              bonusId
 }
+type withdrawAndDepositParams struct {
+	//requred
+	CallerId       callerId
+	PlayerName     playerName
+	Withdraw       withdraw
+	Deposit        deposit
+	Currency       currency
+	TransactionRef transactionRef
+	//not requred
+	GameId               gameId
+	Source               source
+	Reason               reason
+	SessionId            sessionId
+	SessionAlternativeId sessionAlternativeId
+	SpinDetails          spinDetails
+	BonusId              bonusId
+	ChargeFreerounds     chargeFreerounds
+}
 
-type Rpc struct {
+type rollbackTransactionParams struct {
+	//requred
+	CallerId       callerId
+	PlayerName     playerName
+	TransactionRef transactionRef
+	//not requred
+	GameId               gameId
+	SessionId            sessionId
+	SessionAlternativeId sessionAlternativeId
+	RoundId              roundId
+}
+
+type base struct {
+	Jsonrpc string
+	Method  string
+	Params  string
+	Id      id
+}
+
+type getBalanceRpc struct {
 	Jsonrpc string
 	Method  string
 	Params  getBalanceParams
+	Id      id
+}
+
+type withdrawAndDepositRpc struct {
+	Jsonrpc string
+	Method  string
+	Params  withdrawAndDepositParams
+	Id      id
+}
+
+type rollbackTransactionRpc struct {
+	Jsonrpc string
+	Method  string
+	Params  rollbackTransactionParams
 	Id      id
 }
 
@@ -112,34 +164,34 @@ type getBalanceResponse struct {
 	Id      id
 }
 
-func GetBalance(rpc *Rpc) int {
+func GetBalance(wd *getBalanceRpc) balance {
 
-	if _, ok := uB.userBalances[rpc.Params.CallerId]; !ok {
+	if _, ok := uB.userBalances[wd.Params.CallerId]; !ok {
 		randBal := rand.Intn(300) * 100
-		uB.userBalances[rpc.Params.CallerId] = balance(randBal)
+		uB.userBalances[wd.Params.CallerId] = balance(randBal)
 	}
 
-	a, b, e := uB.getUserBalance(rpc.Params.CallerId)
+	a, b, e := uB.getUserBalance(wd.Params.CallerId)
 	fmt.Println("GetBalance  ", a, b, e)
 
-	return 0
+	return b
 }
 
-func WithdrawAndDeposit(rpc *Rpc) int {
+func WithdrawAndDeposit(wd *withdrawAndDepositRpc) balance {
 
-	if _, ok := uB.userBalances[rpc.Params.CallerId]; !ok {
+	if _, ok := uB.userBalances[wd.Params.CallerId]; !ok {
 		randBal := rand.Intn(300) * 100
-		uB.userBalances[rpc.Params.CallerId] = balance(randBal)
+		uB.userBalances[wd.Params.CallerId] = balance(randBal)
 	}
 
-	//rpc.Params.CallerId
-	b := uB.updBalance(rpc.Params.CallerId, 500, 100)
-	fmt.Println("WithdrawAndDeposit ", rpc, b)
-	return 0
+	//wd.Params.CallerId
+	b, err := uB.updBalance(wd.Params.CallerId, wd.Params.Withdraw, wd.Params.Deposit)
+	fmt.Println("WithdrawAndDeposit ", wd, b, err)
+	return b
 }
 
-func RollbackTransaction(rpc *Rpc) int {
-	fmt.Println("RollbackTransaction ", rpc)
+func RollbackTransaction(rb *rollbackTransactionRpc) int {
+	fmt.Println("RollbackTransaction ", rb)
 	return 0
 }
 func NewServer() {
@@ -147,8 +199,13 @@ func NewServer() {
 	uB = userBalancesContainer{
 		userBalances: make(map[callerId]balance),
 	}
-	http.HandleFunc("/mascot/seamless", handler)
-	log.Fatal(http.ListenAndServe(":8080", nil))
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/mascot/seamless", handler)
+
+	err := http.ListenAndServe(":8080", mux)
+	log.Fatal(err)
+
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
@@ -158,28 +215,48 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rpc := &Rpc{}
-	err := json.NewDecoder(r.Body).Decode(rpc)
+	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	requestMethod := rpc.Method
+	rd := base{}
+	json.Unmarshal(body, &rd)
 
-	//fmt.Println("requestMethod ", requestMethod)
+	requestMethod := rd.Method
 
 	switch requestMethod {
 	case getBalanceMethod:
-		go GetBalance(rpc)
+
+		brpc := &getBalanceRpc{}
+		err = json.Unmarshal(body, brpc)
+
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+		go GetBalance(brpc)
+
 	case withdrawAndDepositMethod:
-		go WithdrawAndDeposit(rpc)
+
+		wrpc := &withdrawAndDepositRpc{}
+		err = json.Unmarshal(body, wrpc)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		go WithdrawAndDeposit(wrpc)
+
 	case rollbackTransactionMethod:
-		go RollbackTransaction(rpc)
-	default:
-		fmt.Println("Херовый метод ")
 
+		rrpc := &rollbackTransactionRpc{}
+		err = json.Unmarshal(body, rrpc)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		go RollbackTransaction(rrpc)
 	}
-
 	w.WriteHeader(http.StatusCreated)
 }
