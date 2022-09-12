@@ -18,6 +18,7 @@ type transactionId string
 type freeRoundsLeft int
 
 const (
+	jsonrpc                   = "2.0"
 	getBalanceMethod          = "getBalance"
 	withdrawAndDepositMethod  = "withdrawAndDeposit"
 	rollbackTransactionMethod = "rollbackTransaction"
@@ -149,45 +150,105 @@ type rollbackTransactionRpc struct {
 }
 
 type spinDetailsObject struct {
-	betType string
-	winType string
+	BetType string
+	WinType string
 }
 
-type getBalanceResponseResult struct {
-	balance        balance
-	freeRoundsLeft freeRoundsLeft
+type getBalanceResponseParams struct {
+	Balance        balance
+	FreeRoundsLeft freeRoundsLeft
 }
 
 type getBalanceResponse struct {
-	Jsonrpc string
-	Method  string
-	Params  getBalanceResponseResult
-	Id      id
+	Jsonrpc  string
+	Method   string
+	Params   getBalanceResponseParams
+	CallerId callerId
 }
 
-func GetBalance(wd *getBalanceRpc) balance {
+type withdrawAndDepositResponse struct {
+	Jsonrpc  string
+	Method   string
+	Params   withdrawAndDepositResponseParams
+	CallerId callerId
+}
+
+type withdrawAndDepositResponseParams struct {
+	NewBalance     balance
+	TransactionId  transactionId
+	FreeRoundsLeft freeRoundsLeft
+}
+
+func GetBalance(wd *getBalanceRpc) ([]byte, error) {
 
 	if _, ok := uB.userBalances[wd.Params.CallerId]; !ok {
 		randBal := rand.Intn(300) * 100
 		uB.userBalances[wd.Params.CallerId] = balance(randBal)
 	}
 
-	a, b, e := uB.getUserBalance(wd.Params.CallerId)
-	fmt.Println("GetBalance  ", a, b, e)
+	cId, bal, _ := uB.getUserBalance(wd.Params.CallerId)
 
-	return b
+	resp := getBalanceResponse{
+		Jsonrpc:  jsonrpc,
+		Method:   getBalanceMethod,
+		CallerId: cId,
+		Params: getBalanceResponseParams{
+			Balance: bal,
+		},
+	}
+
+	return json.Marshal(resp)
+
 }
 
-func WithdrawAndDeposit(wd *withdrawAndDepositRpc) (b balance, error string) {
+func WithdrawAndDeposit(body []byte, w http.ResponseWriter) (b balance, error string) {
 
-	if _, ok := uB.userBalances[wd.Params.CallerId]; !ok {
+	wrpc := &withdrawAndDepositRpc{}
+	err := json.Unmarshal(body, wrpc)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	userId := wrpc.Params.CallerId
+	if _, ok := uB.userBalances[userId]; !ok {
 		randBal := rand.Intn(300) * 100
-		uB.userBalances[wd.Params.CallerId] = balance(randBal)
+		uB.userBalances[userId] = balance(randBal)
 	}
 
 	//wd.Params.CallerId
-	b, err := uB.updBalance(wd.Params.CallerId, wd.Params.Withdraw, wd.Params.Deposit)
-	fmt.Println("WithdrawAndDeposit ", wd, b, err)
+	uB.updBalance(wrpc.Params.CallerId, wrpc.Params.Withdraw, wrpc.Params.Deposit)
+
+	resp := withdrawAndDepositResponse{
+		Jsonrpc:  jsonrpc,
+		Method:   withdrawAndDepositMethod,
+		CallerId: userId,
+		Params: withdrawAndDepositResponseParams{
+			NewBalance:     84,
+			TransactionId:  "TransactionId to generate",
+			FreeRoundsLeft: 0,
+		},
+	}
+
+	fmt.Println("WithdrawAndDeposit ", wrpc, b, err)
+
+	w.WriteHeader(http.StatusCreated)
+	w.Header().Set("Content-Type", "application/json")
+
+	if err != nil {
+		log.Fatalf("Error happened in JSON marshal. Err: %s", err)
+	}
+
+	jsonResp, _ := json.Marshal(resp)
+
+	fmt.Println("jsonResp ", string(jsonResp))
+
+	_, e := w.Write(jsonResp)
+
+	if e != nil {
+		fmt.Println("error", e)
+	}
+
 	return b, "false"
 }
 
@@ -202,22 +263,44 @@ func NewServer() {
 		transactionRefsList: make(map[callerId][]string),
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/mascot/seamless", handler)
+	handler := http.HandlerFunc(handler)
+	http.Handle("/mascot/seamless", handler)
+	http.ListenAndServe(":8080", nil)
 
-	err := http.ListenAndServe(":8080", mux)
-	log.Fatal(err)
+	/*	mux := http.NewServeMux()
+		mux.HandleFunc("/mascot/seamless", handler)
 
+		err := http.ListenAndServe(":8080", mux)
+		log.Fatal(err)
+	*/
 }
+
+func handleRequest(w http.ResponseWriter, r *http.Request) {
+
+	return
+}
+
+type Writer interface {
+	Write(p []byte) (n int, err error)
+}
+
+type User struct {
+	Id    int    `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	Phone string `json:"phone"`
+}
+
+var ig int = 0
 
 func handler(w http.ResponseWriter, r *http.Request) {
 
+	body, err := ioutil.ReadAll(r.Body)
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		return
 	}
@@ -227,6 +310,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	requestMethod := rd.Method
 
+	fmt.Println("requestMethod ", requestMethod)
 	switch requestMethod {
 	case getBalanceMethod:
 
@@ -235,20 +319,29 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
-
 			return
 		}
-		go GetBalance(brpc)
+
+		jsonResp, err := GetBalance(brpc)
+
+		w.WriteHeader(http.StatusCreated)
+		w.Header().Set("Content-Type", "application/json")
+
+		if err != nil {
+			log.Fatalf("Error happened in JSON marshal. Err: %s", err)
+		}
+
+		fmt.Println("jsonResp ", string(jsonResp))
+
+		_, e := w.Write(jsonResp)
+
+		if e != nil {
+			fmt.Println("error", e)
+		}
 
 	case withdrawAndDepositMethod:
 
-		wrpc := &withdrawAndDepositRpc{}
-		err = json.Unmarshal(body, wrpc)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		go WithdrawAndDeposit(wrpc)
+		WithdrawAndDeposit(body, w)
 
 	case rollbackTransactionMethod:
 
@@ -258,7 +351,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		go RollbackTransaction(rrpc)
+		RollbackTransaction(rrpc)
 	}
-	w.WriteHeader(http.StatusCreated)
+
 }
