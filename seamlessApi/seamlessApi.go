@@ -17,6 +17,8 @@ type newBalance int
 type transactionId string
 type freeRoundsLeft int
 
+type result string
+
 const (
 	jsonrpc                   = "2.0"
 	getBalanceMethod          = "getBalance"
@@ -53,30 +55,6 @@ type userBalancesContainer struct {
 	mutx                sync.Mutex
 	userBalances        map[callerId]balance
 	transactionRefsList map[callerId][]string
-}
-
-var uB userBalancesContainer
-
-func (c *userBalancesContainer) updBalance(cId callerId, w withdraw, d deposit) (b balance, err bool) {
-	c.mutx.Lock()
-	defer c.mutx.Unlock()
-
-	if (c.userBalances[cId]) >= balance(w) {
-		c.userBalances[cId] -= balance(w)
-		c.userBalances[cId] += balance(d)
-		return b, false
-
-	}
-
-	c.userBalances[cId] = 0
-	return 0, true
-}
-
-func (c *userBalancesContainer) getUserBalance(cId callerId) (callerId, balance, bool) {
-	c.mutx.Lock()
-	defer c.mutx.Unlock()
-	bal := c.userBalances[cId]
-	return cId, bal, false
 }
 
 type getBalanceParams struct {
@@ -160,23 +138,59 @@ type getBalanceResponseParams struct {
 }
 
 type getBalanceResponse struct {
-	Jsonrpc  string
-	Method   string
-	Params   getBalanceResponseParams
-	CallerId callerId
+	Jsonrpc string
+	Method  string
+	Result  getBalanceResponseParams
+	Id      id
 }
 
 type withdrawAndDepositResponse struct {
-	Jsonrpc  string
-	Method   string
-	Params   withdrawAndDepositResponseParams
-	CallerId callerId
+	Jsonrpc string
+	Method  string
+	Result  withdrawAndDepositResponseParams
+	Id      id
 }
 
 type withdrawAndDepositResponseParams struct {
 	NewBalance     balance
 	TransactionId  transactionId
 	FreeRoundsLeft freeRoundsLeft
+}
+
+type rollbackTransactionResponse struct {
+	Jsonrpc  string
+	Method   string
+	Id       id
+	Result   rollbackTransactionResponseParams
+	CallerId callerId
+}
+
+type rollbackTransactionResponseParams struct {
+	Result result
+}
+
+var uB userBalancesContainer
+
+func (c *userBalancesContainer) updBalance(cId callerId, w withdraw, d deposit) (b balance, err bool) {
+	c.mutx.Lock()
+	defer c.mutx.Unlock()
+
+	if (c.userBalances[cId]) >= balance(w) {
+		c.userBalances[cId] -= balance(w)
+		c.userBalances[cId] += balance(d)
+		return b, false
+
+	}
+
+	c.userBalances[cId] = 0
+	return 0, true
+}
+
+func (c *userBalancesContainer) getUserBalance(cId callerId) (callerId, balance, bool) {
+	c.mutx.Lock()
+	defer c.mutx.Unlock()
+	bal := c.userBalances[cId]
+	return cId, bal, false
 }
 
 func GetBalance(wd *getBalanceRpc) ([]byte, error) {
@@ -189,10 +203,10 @@ func GetBalance(wd *getBalanceRpc) ([]byte, error) {
 	cId, bal, _ := uB.getUserBalance(wd.Params.CallerId)
 
 	resp := getBalanceResponse{
-		Jsonrpc:  jsonrpc,
-		Method:   getBalanceMethod,
-		CallerId: cId,
-		Params: getBalanceResponseParams{
+		Jsonrpc: jsonrpc,
+		Method:  getBalanceMethod,
+		Id:      id(cId),
+		Result: getBalanceResponseParams{
 			Balance: bal,
 		},
 	}
@@ -211,20 +225,25 @@ func WithdrawAndDeposit(body []byte, w http.ResponseWriter) (b balance, error st
 	}
 
 	userId := wrpc.Params.CallerId
+	wd := wrpc.Params.Withdraw
+	de := wrpc.Params.Deposit
+	// если нету такого пользователя то создаем заного
 	if _, ok := uB.userBalances[userId]; !ok {
 		randBal := rand.Intn(300) * 100
 		uB.userBalances[userId] = balance(randBal)
 	}
 
 	//wd.Params.CallerId
-	uB.updBalance(wrpc.Params.CallerId, wrpc.Params.Withdraw, wrpc.Params.Deposit)
+	uB.updBalance(userId, wd, de)
+
+	_, bal, _ := uB.getUserBalance(userId)
 
 	resp := withdrawAndDepositResponse{
-		Jsonrpc:  jsonrpc,
-		Method:   withdrawAndDepositMethod,
-		CallerId: userId,
-		Params: withdrawAndDepositResponseParams{
-			NewBalance:     84,
+		Jsonrpc: jsonrpc,
+		Method:  withdrawAndDepositMethod,
+		Id:      id(userId),
+		Result: withdrawAndDepositResponseParams{
+			NewBalance:     bal,
 			TransactionId:  "TransactionId to generate",
 			FreeRoundsLeft: 0,
 		},
