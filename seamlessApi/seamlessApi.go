@@ -11,10 +11,7 @@ import (
 	"time"
 )
 
-type apifunc func() int
-
 type balance int
-type newBalance int
 type transactionId string
 type freeRoundsLeft int
 
@@ -88,6 +85,7 @@ type withdrawAndDepositParams struct {
 	SpinDetails          spinDetails          `json:"spinDetails"`
 	BonusId              bonusId              `json:"bonusId"`
 	ChargeFreerounds     chargeFreerounds     `json:"chargeFreerounds"`
+	GameRoundRef         gameRoundRef         `json:"gameRoundRef"`
 }
 
 type rollbackStruct struct {
@@ -207,15 +205,15 @@ func (c *userBalancesContainer) updBalance(uId callerId, wdraw withdraw, depo de
 	c.mutx.Lock()
 	defer c.mutx.Unlock()
 
+	// если нет списка пользователей генерируем
 	if _, ok := c.userBalances[uId]; !ok {
 		randBal := rand.Intn(300) * 100
 		c.userBalances[uId] = balance(randBal)
 	}
 	if _, ok := c.userFreeRoundsRemaining[uId]; !ok {
-		randBal := rand.Intn(2)
+		randBal := rand.Intn(5)
 		c.userFreeRoundsRemaining[uId] = freeRoundsLeft(randBal)
 
-		println("dadadadadadad")
 	}
 
 	freeRundsLeft := int(c.userFreeRoundsRemaining[uId])
@@ -243,9 +241,7 @@ func (c *userBalancesContainer) updBalance(uId callerId, wdraw withdraw, depo de
 func (c *userBalancesContainer) rollbackBalance(uId callerId, wdraw withdraw, depo deposit, cfree chargeFreerounds) (b balance, err bool) {
 	c.mutx.Lock()
 	defer c.mutx.Unlock()
-
 	c.userFreeRoundsRemaining[uId] += freeRoundsLeft(cfree)
-
 	c.userBalances[uId] -= balance(depo)
 	c.userBalances[uId] += balance(wdraw)
 	return c.userBalances[uId], false
@@ -260,7 +256,6 @@ func (c *userBalancesContainer) getUserBalance(uId callerId) (balance, freeRound
 }
 
 func GetBalance(body []byte, wdraw http.ResponseWriter) (error string) {
-
 	brpc := &getBalanceRpc{}
 	err := json.Unmarshal(body, brpc)
 	if err != nil {
@@ -299,13 +294,9 @@ func GetBalance(body []byte, wdraw http.ResponseWriter) (error string) {
 	if err != nil {
 		log.Fatalf("Error happened in JSON marshal. Err: %s", err)
 	}
-
 	jsonResp, _ := json.Marshal(resp)
-
 	fmt.Println("jsonResp ", string(jsonResp))
-
 	_, e := wdraw.Write(jsonResp)
-
 	if e != nil {
 		fmt.Println("error", e)
 	}
@@ -329,7 +320,6 @@ func WithdrawAndDeposit(body []byte, wdraw http.ResponseWriter) (b balance, erro
 
 	if _, ok := uB.transactionRefsList[tr]; !ok {
 		// если  подобный transactionRefs отсутствует то создаем
-
 		entry := rollbackStruct{}
 		entry.dep = de
 		entry.withdr = wd
@@ -351,15 +341,33 @@ func WithdrawAndDeposit(body []byte, wdraw http.ResponseWriter) (b balance, erro
 
 	ba, _, _ := uB.getUserBalance(userId)
 
+	var errorCode int
+	var errMessage string
+
 	if int(wd) > int(ba) {
+		errorCode = 1
+		errMessage = "ErrNotEnoughMoneyCode"
+	}
+
+	if de < 0 {
+		errorCode = 3
+		errMessage = "ErrNegativeDepositCode"
+	}
+
+	if wd < 0 {
+		errorCode = 4
+		errMessage = "ErrNegativeWithdrawalCode"
+	}
+
+	if errorCode > 0 {
 
 		resp := errorStr{
 			Id:      id(userId),
 			Jsonrpc: jsonrpc,
 
 			Error: errorPar{
-				Code:    1,
-				Message: "ErrNotEnoughMoneyCode",
+				Code:    errorCode,
+				Message: errMessage,
 			},
 		}
 
@@ -398,24 +406,17 @@ func WithdrawAndDeposit(body []byte, wdraw http.ResponseWriter) (b balance, erro
 			FreeRoundsLeft: frleft,
 		}
 	}
-
 	wdraw.WriteHeader(http.StatusCreated)
 	wdraw.Header().Set("Content-Type", "application/json")
-
 	if err != nil {
 		log.Fatalf("Error happened in JSON marshal. Err: %s", err)
 	}
-
 	jsonResp, _ := json.Marshal(resp)
-
 	fmt.Println("jsonResp ", string(jsonResp))
-
 	_, e := wdraw.Write(jsonResp)
-
 	if e != nil {
 		fmt.Println("error", e)
 	}
-
 	return b, "false"
 }
 
@@ -427,49 +428,36 @@ func RollbackTransaction(body []byte, wdraw http.ResponseWriter) (b balance, err
 		http.Error(wdraw, err.Error(), http.StatusBadRequest)
 		return
 	}
-
 	tr := rbrpc.Params.TransactionRef
-
 	if _, ok := uB.transactionRefsList[tr]; !ok {
 		// если  подобный transactionRefs отсутствует то создаем и помечаем как откаченый
-
 		entry := rollbackStruct{}
 		entry.rolledBack = true
 		entry.tRef = tr
 		uB.transactionRefsList[tr] = entry
-
 	} else {
 		entry := uB.transactionRefsList[tr]
 		uB.rollbackBalance(entry.uId, entry.withdr, entry.dep, entry.fr)
 		return
 	}
-
 	userId := rbrpc.Params.CallerId
-
 	resp := rollbackTransactionResponse{
 		Jsonrpc: jsonrpc,
 		Method:  rollbackTransactionMethod,
 		Id:      id(userId),
 		Result:  rollbackTransactionResponseParams{},
 	}
-
 	wdraw.WriteHeader(http.StatusCreated)
 	wdraw.Header().Set("Content-Type", "application/json")
-
 	if err != nil {
 		log.Fatalf("Error happened in JSON marshal. Err: %s", err)
 	}
-
 	jsonResp, _ := json.Marshal(resp)
-
 	fmt.Println("jsonResp ", string(jsonResp))
-
 	_, e := wdraw.Write(jsonResp)
-
 	if e != nil {
 		fmt.Println("error", e)
 	}
-
 	return b, "false"
 }
 func NewServer() {
@@ -479,7 +467,6 @@ func NewServer() {
 		userFreeRoundsRemaining: make(map[callerId]freeRoundsLeft),
 		transactionRefsList:     make(map[transactionRef]rollbackStruct),
 	}
-
 	handler := http.HandlerFunc(handler)
 	http.Handle("/mascot/seamless", handler)
 	http.ListenAndServe(":8080", nil)
