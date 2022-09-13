@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net/http"
 	"sync"
+	"time"
 )
 
 type apifunc func() int
@@ -25,6 +26,7 @@ const (
 	withdrawAndDepositMethod  = "withdrawAndDeposit"
 	rollbackTransactionMethod = "rollbackTransaction"
 )
+const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
 
 // common parameters
 type callerId int
@@ -55,7 +57,7 @@ type userBalancesContainer struct {
 	mutx                    sync.Mutex
 	userBalances            map[callerId]balance
 	userFreeRoundsRemaining map[callerId]freeRoundsLeft
-	transactionRefsList     map[callerId][]string
+	transactionRefsList     map[transactionRef]rollbackStruct
 }
 
 type getBalanceParams struct {
@@ -86,6 +88,15 @@ type withdrawAndDepositParams struct {
 	SpinDetails          spinDetails
 	BonusId              bonusId
 	ChargeFreerounds     chargeFreerounds
+}
+
+type rollbackStruct struct {
+	tRef       transactionRef
+	rolledBack bool
+	withdr     withdraw
+	dep        deposit
+	fr         chargeFreerounds
+	uId        callerId
 }
 
 type rollbackTransactionParams struct {
@@ -159,60 +170,91 @@ type withdrawAndDepositResponseParams struct {
 }
 
 type rollbackTransactionResponse struct {
-	Jsonrpc  string
-	Method   string
-	Id       id
-	Result   rollbackTransactionResponseParams
-	CallerId callerId
+	Jsonrpc string
+	Method  string
+	Id      id
+	Result  rollbackTransactionResponseParams
 }
 
 type rollbackTransactionResponseParams struct {
-	Result result
+	Result result `json:"Result,omitempty"`
 }
 
 var uB userBalancesContainer
 
-func (c *userBalancesContainer) updBalance(cId callerId, wdraw withdraw, depo deposit, cfree chargeFreerounds) (b balance, err bool) {
+func RandStringBytes(n int) string {
+	rand.Seed(time.Now().UnixNano())
+
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letters[rand.Intn(len(letters))]
+	}
+	return string(b)
+}
+
+func (c *userBalancesContainer) updBalance(uId callerId, wdraw withdraw, depo deposit, cfree chargeFreerounds) (b balance, err bool) {
 	c.mutx.Lock()
 	defer c.mutx.Unlock()
-	if _, ok := uB.userBalances[cId]; !ok {
+
+	if _, ok := uB.userBalances[uId]; !ok {
 		randBal := rand.Intn(300) * 100
-		uB.userBalances[cId] = balance(randBal)
+		uB.userBalances[uId] = balance(randBal)
 	}
-	if _, ok := uB.userFreeRoundsRemaining[cId]; !ok {
+	if _, ok := uB.userFreeRoundsRemaining[uId]; !ok {
 		randBal := rand.Intn(2)
-		uB.userFreeRoundsRemaining[cId] = freeRoundsLeft(randBal)
+		uB.userFreeRoundsRemaining[uId] = freeRoundsLeft(randBal)
 	}
 
-	freeRundsLeft := int(c.userFreeRoundsRemaining[cId])
+	freeRundsLeft := int(c.userFreeRoundsRemaining[uId])
 	if wdraw > 0 && freeRundsLeft >= int(cfree) {
-		c.userFreeRoundsRemaining[cId]-- // reduce free rounds and ignore debiting
-		c.userBalances[cId] += balance(depo)
-		return c.userBalances[cId], false
+		c.userFreeRoundsRemaining[uId] -= freeRoundsLeft(cfree) // reduce free rounds and ignore debiting
+		if c.userFreeRoundsRemaining[uId] < 0 {
+			c.userFreeRoundsRemaining[uId] = 0
+		}
+		c.userBalances[uId] += balance(depo)
+		return c.userBalances[uId], false
 	} else {
-		if (c.userBalances[cId]) >= balance(wdraw) {
-			c.userBalances[cId] -= balance(wdraw) //  decrease  the amount from the withdraw field.
-			c.userBalances[cId] += balance(depo)
+		if (c.userBalances[uId]) >= balance(wdraw) {
+			c.userBalances[uId] -= balance(wdraw) //  decrease  the amount from the withdraw field.
+			c.userBalances[uId] += balance(depo)
 			return b, false
 		} else {
-			c.userBalances[cId] = 0
+			c.userBalances[uId] = 0
 			return 0, true
 		}
 	}
 
 }
 
-func (c *userBalancesContainer) getUserBalance(cId callerId) (balance, freeRoundsLeft, bool) {
+func (c *userBalancesContainer) rollbackBalance(uId callerId, wdraw withdraw, depo deposit, cfree chargeFreerounds) (b balance, err bool) {
 	c.mutx.Lock()
 	defer c.mutx.Unlock()
-	bal := c.userBalances[cId]
-	fr := c.userFreeRoundsRemaining[cId]
+
+	c.userFreeRoundsRemaining[uId] += freeRoundsLeft(cfree)
+
+	c.userBalances[uId] -= balance(depo)
+	c.userBalances[uId] += balance(wdraw)
+	return c.userBalances[uId], false
+}
+
+func (c *userBalancesContainer) getUserBalance(uId callerId) (balance, freeRoundsLeft, bool) {
+	c.mutx.Lock()
+	defer c.mutx.Unlock()
+	bal := c.userBalances[uId]
+	fr := c.userFreeRoundsRemaining[uId]
 	return bal, fr, false
 }
 
-func GetBalance(wd *getBalanceRpc) ([]byte, error) {
+func GetBalance(body []byte, wdraw http.ResponseWriter) (error string) {
 
-	userId := wd.Params.CallerId
+	brpc := &getBalanceRpc{}
+	err := json.Unmarshal(body, brpc)
+	if err != nil {
+		http.Error(wdraw, err.Error(), http.StatusBadRequest)
+		return "true"
+	}
+
+	userId := brpc.Params.CallerId
 
 	if _, ok := uB.userBalances[userId]; !ok {
 		randBal := rand.Intn(300) * 100
@@ -224,7 +266,7 @@ func GetBalance(wd *getBalanceRpc) ([]byte, error) {
 		uB.userFreeRoundsRemaining[userId] = freeRoundsLeft(randBal)
 	}
 
-	bal, frleft, _ := uB.getUserBalance(wd.Params.CallerId)
+	bal, frleft, _ := uB.getUserBalance(brpc.Params.CallerId)
 
 	resp := getBalanceResponse{
 		Jsonrpc: jsonrpc,
@@ -242,29 +284,65 @@ func GetBalance(wd *getBalanceRpc) ([]byte, error) {
 		}
 	}
 
-	return json.Marshal(resp)
+	wdraw.WriteHeader(http.StatusCreated)
+	wdraw.Header().Set("Content-Type", "application/json")
 
+	if err != nil {
+		log.Fatalf("Error happened in JSON marshal. Err: %s", err)
+	}
+
+	jsonResp, _ := json.Marshal(resp)
+
+	fmt.Println("jsonResp ", string(jsonResp))
+
+	_, e := wdraw.Write(jsonResp)
+
+	if e != nil {
+		fmt.Println("error", e)
+	}
+	return "false"
 }
 
 func WithdrawAndDeposit(body []byte, wdraw http.ResponseWriter) (b balance, error string) {
 
-	wrpc := &withdrawAndDepositRpc{}
-	err := json.Unmarshal(body, wrpc)
+	rbrpc := &withdrawAndDepositRpc{}
+	err := json.Unmarshal(body, rbrpc)
 	if err != nil {
 		http.Error(wdraw, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	userId := wrpc.Params.CallerId
-	wd := wrpc.Params.Withdraw
-	de := wrpc.Params.Deposit
-	fr := wrpc.Params.ChargeFreerounds
+	userId := rbrpc.Params.CallerId
+	wd := rbrpc.Params.Withdraw
+	de := rbrpc.Params.Deposit
+	fr := rbrpc.Params.ChargeFreerounds
+	tr := rbrpc.Params.TransactionRef
+
+	if _, ok := uB.transactionRefsList[tr]; !ok {
+		// если  подобный transactionRefs отсутствует то создаем
+
+		entry := rollbackStruct{}
+		entry.dep = de
+		entry.withdr = wd
+		entry.rolledBack = false
+		entry.tRef = tr
+		entry.uId = userId
+		entry.fr = fr
+		uB.transactionRefsList[tr] = entry
+
+	} else {
+
+		http.Error(wdraw, "Operation already Rolled Back", http.StatusBadRequest)
+		fmt.Println("Operation already Rolled Back")
+
+		return
+	}
 
 	uB.updBalance(userId, wd, de, fr)
 
 	bal, frleft, _ := uB.getUserBalance(userId)
 
-	generatedTransId := transactionId("TransactionId to generate")
+	generatedTransId := transactionId(RandStringBytes(18))
 
 	resp := withdrawAndDepositResponse{
 		Jsonrpc: jsonrpc,
@@ -304,107 +382,94 @@ func WithdrawAndDeposit(body []byte, wdraw http.ResponseWriter) (b balance, erro
 	return b, "false"
 }
 
-func RollbackTransaction(rb *rollbackTransactionRpc) int {
-	fmt.Println("RollbackTransaction ", rb)
-	return 0
+func RollbackTransaction(body []byte, wdraw http.ResponseWriter) (b balance, error string) {
+
+	rbrpc := &rollbackTransactionRpc{}
+	err := json.Unmarshal(body, rbrpc)
+	if err != nil {
+		http.Error(wdraw, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	tr := rbrpc.Params.TransactionRef
+
+	if _, ok := uB.transactionRefsList[tr]; !ok {
+		// если  подобный transactionRefs отсутствует то создаем и помечаем как откаченый
+
+		entry := rollbackStruct{}
+		entry.rolledBack = true
+		entry.tRef = tr
+		uB.transactionRefsList[tr] = entry
+
+	} else {
+		entry := uB.transactionRefsList[tr]
+		uB.rollbackBalance(entry.uId, entry.withdr, entry.dep, entry.fr)
+		return
+	}
+
+	userId := rbrpc.Params.CallerId
+
+	resp := rollbackTransactionResponse{
+		Jsonrpc: jsonrpc,
+		Method:  rollbackTransactionMethod,
+		Id:      id(userId),
+		Result:  rollbackTransactionResponseParams{},
+	}
+
+	wdraw.WriteHeader(http.StatusCreated)
+	wdraw.Header().Set("Content-Type", "application/json")
+
+	if err != nil {
+		log.Fatalf("Error happened in JSON marshal. Err: %s", err)
+	}
+
+	jsonResp, _ := json.Marshal(resp)
+
+	fmt.Println("jsonResp ", string(jsonResp))
+
+	_, e := wdraw.Write(jsonResp)
+
+	if e != nil {
+		fmt.Println("error", e)
+	}
+
+	return b, "false"
 }
 func NewServer() {
 
 	uB = userBalancesContainer{
 		userBalances:            make(map[callerId]balance),
 		userFreeRoundsRemaining: make(map[callerId]freeRoundsLeft),
-		transactionRefsList:     make(map[callerId][]string),
+		transactionRefsList:     make(map[transactionRef]rollbackStruct),
 	}
 
 	handler := http.HandlerFunc(handler)
 	http.Handle("/mascot/seamless", handler)
 	http.ListenAndServe(":8080", nil)
-
-	/*	mux := http.NewServeMux()
-		mux.HandleFunc("/mascot/seamless", handler)
-
-		err := http.ListenAndServe(":8080", mux)
-		log.Fatal(err)
-	*/
 }
-
-func handleRequest(wdraw http.ResponseWriter, r *http.Request) {
-
-	return
-}
-
-type Writer interface {
-	Write(p []byte) (n int, err error)
-}
-
-type User struct {
-	Id    int    `json:"id"`
-	Name  string `json:"name"`
-	Email string `json:"email"`
-	Phone string `json:"phone"`
-}
-
-var ig int = 0
 
 func handler(wdraw http.ResponseWriter, r *http.Request) {
 
 	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(wdraw, err.Error(), http.StatusMethodNotAllowed)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(wdraw, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	if err != nil {
-		return
-	}
-
 	rd := base{}
 	json.Unmarshal(body, &rd)
-
 	requestMethod := rd.Method
 
-	fmt.Println("requestMethod ", requestMethod)
 	switch requestMethod {
 	case getBalanceMethod:
-
-		brpc := &getBalanceRpc{}
-		err = json.Unmarshal(body, brpc)
-
-		if err != nil {
-			http.Error(wdraw, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		jsonResp, err := GetBalance(brpc)
-
-		wdraw.WriteHeader(http.StatusCreated)
-		wdraw.Header().Set("Content-Type", "application/json")
-
-		if err != nil {
-			log.Fatalf("Error happened in JSON marshal. Err: %s", err)
-		}
-
-		fmt.Println("jsonResp ", string(jsonResp))
-
-		_, e := wdraw.Write(jsonResp)
-
-		if e != nil {
-			fmt.Println("error", e)
-		}
-
+		GetBalance(body, wdraw)
 	case withdrawAndDepositMethod:
-
 		WithdrawAndDeposit(body, wdraw)
-
 	case rollbackTransactionMethod:
-
-		rrpc := &rollbackTransactionRpc{}
-		err = json.Unmarshal(body, rrpc)
-		if err != nil {
-			http.Error(wdraw, err.Error(), http.StatusBadRequest)
-			return
-		}
-		RollbackTransaction(rrpc)
+		RollbackTransaction(body, wdraw)
 	}
-
 }
