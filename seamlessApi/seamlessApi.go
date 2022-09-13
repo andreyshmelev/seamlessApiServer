@@ -62,32 +62,32 @@ type userBalancesContainer struct {
 
 type getBalanceParams struct {
 	//requred
-	CallerId   callerId
-	PlayerName playerName
-	Currency   currency
+	CallerId   callerId   `json:"callerId"`
+	PlayerName playerName `json:"playerName"`
+	Currency   currency   `json:"currency"`
 	//not requred
-	GameId               gameId
-	SessionId            sessionId
-	SessionAlternativeId sessionAlternativeId
-	BonusId              bonusId
+	GameId               gameId               `json:"gameId"`
+	SessionId            sessionId            `json:"sessionId"`
+	SessionAlternativeId sessionAlternativeId `json:"sessionAlternativeId"`
+	BonusId              bonusId              `json:"bonusId"`
 }
 type withdrawAndDepositParams struct {
 	//requred
-	CallerId       callerId
-	PlayerName     playerName
-	Withdraw       withdraw
-	Deposit        deposit
-	Currency       currency
-	TransactionRef transactionRef
+	CallerId       callerId       `json:"callerId"`
+	PlayerName     playerName     `json:"playerName"`
+	Withdraw       withdraw       `json:"withdraw"`
+	Deposit        deposit        `json:"deposit"`
+	Currency       currency       `json:"currency"`
+	TransactionRef transactionRef `json:"transactionRef"`
 	//not requred
-	GameId               gameId
-	Source               source
-	Reason               reason
-	SessionId            sessionId
-	SessionAlternativeId sessionAlternativeId
-	SpinDetails          spinDetails
-	BonusId              bonusId
-	ChargeFreerounds     chargeFreerounds
+	GameId               gameId               `json:"gameId"`
+	Source               source               `json:"source"`
+	Reason               reason               `json:"reason"`
+	SessionId            sessionId            `json:"sessionId"`
+	SessionAlternativeId sessionAlternativeId `json:"sessionAlternativeId"`
+	SpinDetails          spinDetails          `json:"spinDetails"`
+	BonusId              bonusId              `json:"bonusId"`
+	ChargeFreerounds     chargeFreerounds     `json:"chargeFreerounds"`
 }
 
 type rollbackStruct struct {
@@ -101,14 +101,14 @@ type rollbackStruct struct {
 
 type rollbackTransactionParams struct {
 	//requred
-	CallerId       callerId
-	PlayerName     playerName
-	TransactionRef transactionRef
+	CallerId       callerId       `json:"callerId"`
+	PlayerName     playerName     `json:"playerName"`
+	TransactionRef transactionRef `json:"transactionRef"`
 	//not requred
-	GameId               gameId
-	SessionId            sessionId
-	SessionAlternativeId sessionAlternativeId
-	RoundId              roundId
+	GameId               gameId               `json:"gameId"`
+	SessionId            sessionId            `json:"sessionId"`
+	SessionAlternativeId sessionAlternativeId `json:"sessionAlternativeId"`
+	RoundId              roundId              `json:"roundId"`
 }
 
 type base struct {
@@ -118,62 +118,73 @@ type base struct {
 	Id      id
 }
 
+type errorStr struct {
+	Jsonrpc string   `json:"jsonrpc"`
+	Id      id       `json:"id"`
+	Error   errorPar `json:"error"`
+}
+
+type errorPar struct {
+	Code    int    `json:"code"`
+	Message string `json:"messsage"`
+}
+
 type getBalanceRpc struct {
-	Jsonrpc string
-	Method  string
-	Params  getBalanceParams
-	Id      id
+	Jsonrpc string           `json:"jsonrpc"`
+	Method  string           `json:"method"`
+	Params  getBalanceParams `json:"params"`
+	Id      id               `json:"id"`
 }
 
 type withdrawAndDepositRpc struct {
-	Jsonrpc string
-	Method  string
-	Params  withdrawAndDepositParams
-	Id      id
+	Jsonrpc string                   `json:"jsonrpc"`
+	Method  string                   `json:"method"`
+	Params  withdrawAndDepositParams `json:"params"`
+	Id      id                       `json:"id"`
 }
 
 type rollbackTransactionRpc struct {
-	Jsonrpc string
-	Method  string
-	Params  rollbackTransactionParams
-	Id      id
+	Jsonrpc string                    `json:"jsonrpc"`
+	Method  string                    `json:"method"`
+	Params  rollbackTransactionParams `json:"params"`
+	Id      id                        `json:"id"`
 }
 
 type spinDetailsObject struct {
-	BetType string
-	WinType string
+	BetType string `json:"betType"`
+	WinType string `json:"winType"`
 }
 
 type getBalanceResponseParams struct {
-	Balance        balance
-	FreeRoundsLeft freeRoundsLeft
+	Balance        balance        `json:"balance"`
+	FreeRoundsLeft freeRoundsLeft `json:"freeRoundsLeft"`
 }
 
 type getBalanceResponse struct {
-	Jsonrpc string
-	Method  string
-	Result  getBalanceResponseParams
-	Id      id
+	Jsonrpc string                   `json:"jsonrpc"`
+	Method  string                   `json:"method"`
+	Result  getBalanceResponseParams `json:"result"`
+	Id      id                       `json:"id"`
 }
 
 type withdrawAndDepositResponse struct {
-	Jsonrpc string
-	Method  string
-	Result  withdrawAndDepositResponseParams
-	Id      id
+	Jsonrpc string                           `json:"jsonrpc"`
+	Method  string                           `json:"method"`
+	Result  withdrawAndDepositResponseParams `json:"result"`
+	Id      id                               `json:"id"`
 }
 
 type withdrawAndDepositResponseParams struct {
-	NewBalance     balance
-	TransactionId  transactionId
-	FreeRoundsLeft freeRoundsLeft
+	NewBalance     balance        `json:"newBalance"`
+	TransactionId  transactionId  `json:"transactionId"`
+	FreeRoundsLeft freeRoundsLeft `json:"freeRoundsLeft"`
 }
 
 type rollbackTransactionResponse struct {
-	Jsonrpc string
-	Method  string
-	Id      id
-	Result  rollbackTransactionResponseParams
+	Jsonrpc string                            `json:"jsonrpc"`
+	Method  string                            `json:"method"`
+	Id      id                                `json:"id"`
+	Result  rollbackTransactionResponseParams `json:"result"`
 }
 
 type rollbackTransactionResponseParams struct {
@@ -196,23 +207,26 @@ func (c *userBalancesContainer) updBalance(uId callerId, wdraw withdraw, depo de
 	c.mutx.Lock()
 	defer c.mutx.Unlock()
 
-	if _, ok := uB.userBalances[uId]; !ok {
+	if _, ok := c.userBalances[uId]; !ok {
 		randBal := rand.Intn(300) * 100
-		uB.userBalances[uId] = balance(randBal)
+		c.userBalances[uId] = balance(randBal)
 	}
-	if _, ok := uB.userFreeRoundsRemaining[uId]; !ok {
+	if _, ok := c.userFreeRoundsRemaining[uId]; !ok {
 		randBal := rand.Intn(2)
-		uB.userFreeRoundsRemaining[uId] = freeRoundsLeft(randBal)
+		c.userFreeRoundsRemaining[uId] = freeRoundsLeft(randBal)
+
+		println("dadadadadadad")
 	}
 
 	freeRundsLeft := int(c.userFreeRoundsRemaining[uId])
-	if wdraw > 0 && freeRundsLeft >= int(cfree) {
+
+	if wdraw > 0 && freeRundsLeft >= int(cfree) && freeRundsLeft > 0 && cfree > 0 {
 		c.userFreeRoundsRemaining[uId] -= freeRoundsLeft(cfree) // reduce free rounds and ignore debiting
 		if c.userFreeRoundsRemaining[uId] < 0 {
 			c.userFreeRoundsRemaining[uId] = 0
 		}
 		c.userBalances[uId] += balance(depo)
-		return c.userBalances[uId], false
+		return uB.userBalances[uId], false
 	} else {
 		if (c.userBalances[uId]) >= balance(wdraw) {
 			c.userBalances[uId] -= balance(wdraw) //  decrease  the amount from the withdraw field.
@@ -259,11 +273,6 @@ func GetBalance(body []byte, wdraw http.ResponseWriter) (error string) {
 	if _, ok := uB.userBalances[userId]; !ok {
 		randBal := rand.Intn(300) * 100
 		uB.userBalances[userId] = balance(randBal)
-	}
-
-	if _, ok := uB.userFreeRoundsRemaining[userId]; !ok {
-		randBal := rand.Intn(5)
-		uB.userFreeRoundsRemaining[userId] = freeRoundsLeft(randBal)
 	}
 
 	bal, frleft, _ := uB.getUserBalance(brpc.Params.CallerId)
@@ -335,6 +344,34 @@ func WithdrawAndDeposit(body []byte, wdraw http.ResponseWriter) (b balance, erro
 		http.Error(wdraw, "Operation already Rolled Back", http.StatusBadRequest)
 		fmt.Println("Operation already Rolled Back")
 
+		return
+	}
+
+	// если ставка больше чем депозит то ошибка нет денег
+
+	ba, _, _ := uB.getUserBalance(userId)
+
+	if int(wd) > int(ba) {
+
+		resp := errorStr{
+			Id:      id(userId),
+			Jsonrpc: jsonrpc,
+
+			Error: errorPar{
+				Code:    1,
+				Message: "ErrNotEnoughMoneyCode",
+			},
+		}
+
+		jsonResp, _ := json.Marshal(resp)
+
+		fmt.Println("jsonResp ", string(jsonResp))
+
+		_, e := wdraw.Write(jsonResp)
+
+		if e != nil {
+			fmt.Println("error", e)
+		}
 		return
 	}
 
