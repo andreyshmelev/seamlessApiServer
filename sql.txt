@@ -1,0 +1,47 @@
+-- Database: sDB
+
+-- DROP DATABASE IF EXISTS "sDB";
+
+CREATE DATABASE "sDB"
+    WITH
+    OWNER = postgres
+    ENCODING = 'UTF8'
+    LC_COLLATE = 'Russian_Russia.1251'
+    LC_CTYPE = 'Russian_Russia.1251'
+    TABLESPACE = pg_default
+    CONNECTION LIMIT = -1
+    IS_TEMPLATE = False;
+	
+	-- Table: public.transactions
+
+-- DROP TABLE IF EXISTS public.transactions;
+
+CREATE TABLE IF NOT EXISTS public.transactions
+(
+    "transactionRef" text COLLATE pg_catalog."default" NOT NULL,
+    "rolledBack" boolean,
+    "callerId" bigint,
+    withdraw bigint,
+    deposit bigint
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS public.transactions
+    OWNER to postgres;
+	
+	-- Table: public.users
+
+-- DROP TABLE IF EXISTS public.users;
+
+CREATE TABLE IF NOT EXISTS public.users
+(
+    "userId" bigint NOT NULL,
+    balance bigint,
+    "freeRoundsLeft" bigint
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS public.users
+    OWNER to postgres;
