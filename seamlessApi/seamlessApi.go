@@ -194,7 +194,7 @@ func RandStringBytes(n int) string {
 
 func rollbackBalance(cId callerId, wdraw withdraw, depo deposit, charge chargeFreerounds, tr transactionRef) (e error) {
 
-	_, rb, cId, wi, de, cf, e := getTransactionDB(tr)
+	_, rb, _, wi, de, cf, e := getTransactionDB(tr)
 	if e != nil {
 		e := fmt.Errorf("read transaction error")
 		return e
@@ -280,7 +280,7 @@ func WithdrawAndDeposit(body []byte, wdraw http.ResponseWriter) (b balance, erro
 	t, _, _, _, _, _, _ := getTransactionDB(tr)
 	// если  подобный transactionRefs присутствует то выходим
 	if t == tr {
-		http.Error(wdraw, "Operation was done and already Rolled Back", http.StatusBadRequest)
+		http.Error(wdraw, "operation was done and already rolled back", http.StatusBadRequest)
 		fmt.Println("Operation was done and already Rolled Back")
 		return
 	}
@@ -395,7 +395,7 @@ func calcBalance(cId callerId, wdraw withdraw, depo deposit, charge chargeFreero
 		} else {
 			ba = 0
 			freeRndLeft = 0
-			e := fmt.Errorf("Balance and withdraw conflict")
+			e := fmt.Errorf("balance and withdraw conflict")
 			return ba, freeRndLeft, e
 		}
 	}
@@ -427,7 +427,7 @@ func RollbackTransaction(body []byte, wdraw http.ResponseWriter) (error string) 
 
 	if t != tr {
 		createTransactionDB(0, 0, true, tr, cId, 0)
-		e := fmt.Errorf("no transactions found, marked as rolledBack:", tr)
+		e := fmt.Errorf("no transactions found, marked as rolledBack")
 		fmt.Println("no transactions found, marked as rolledBack:", tr)
 
 		return e.Error()
