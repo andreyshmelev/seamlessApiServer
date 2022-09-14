@@ -106,7 +106,7 @@ func getBalanceDB(cId callerId) (balance, freeRoundsLeft, error) {
 	return bal, fr, nil
 }
 
-func createTransactionDB(de deposit, wd withdraw, rb rolledBack, transw transactionRef, cId callerId) error {
+func createTransactionDB(de deposit, wd withdraw, rb rolledBack, transw transactionRef, cId callerId, cf chargeFreerounds) error {
 	// connection string
 	psqlconn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", host, port, user, password, dbname)
 
@@ -128,7 +128,8 @@ func createTransactionDB(de deposit, wd withdraw, rb rolledBack, transw transact
 		return err
 	}
 
-	rows, err := db.Query(`INSERT into "transactions"( "transactionRef","rolledBack", "callerId", "withdraw", "deposit") values($1,$2,$3,$4,$5)`, transw, rb, cId, wd, de)
+	rows, err := db.Query(`INSERT into "transactions"( "transactionRef","rolledBack", "callerId", "withdraw", "deposit", "chargeFreerounds") 
+	values($1,$2,$3,$4,$5,$6)`, transw, rb, cId, wd, de, cf)
 
 	if err != nil {
 		fmt.Println("!!err", err)
@@ -137,7 +138,8 @@ func createTransactionDB(de deposit, wd withdraw, rb rolledBack, transw transact
 	defer rows.Close()
 	return err
 }
-func getTransactionDB(tref transactionRef) (transw transactionRef, rb rolledBack, cId callerId, wd withdraw, de deposit, e error) {
+
+func getTransactionDB(tref transactionRef) (transw transactionRef, rb rolledBack, cId callerId, wd withdraw, de deposit, cf chargeFreerounds, e error) {
 
 	// default for test
 
@@ -149,7 +151,7 @@ func getTransactionDB(tref transactionRef) (transw transactionRef, rb rolledBack
 
 	if err != nil {
 		fmt.Println(err)
-		return "", false, -1, -1, -1, err
+		return "", false, -1, -1, -1, -1, err
 	}
 
 	// close database
@@ -159,34 +161,73 @@ func getTransactionDB(tref transactionRef) (transw transactionRef, rb rolledBack
 	err = db.Ping()
 	if err != nil {
 		fmt.Println(err)
-		return "", false, -1, -1, -1, err
+		return "", false, -1, -1, -1, -1, err
 	}
 
 	var t transactionRef
-	rows, err := db.Query(`SELECT "transactionRef","rolledBack","callerId", "withdraw" , "deposit" FROM "transactions" 
+	rows, err := db.Query(`SELECT "transactionRef","rolledBack","callerId", "withdraw" , "deposit" , "chargeFreerounds"FROM "transactions" 
 	where "transactionRef" = $1`, string(tref))
 
 	if err != nil {
 		fmt.Println(err)
-		return "", false, -1, -1, -1, err
+		return "", false, -1, -1, -1, -1, err
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 
-		err = rows.Scan(&t, &rb, &cId, &wd, &de)
+		err = rows.Scan(&t, &rb, &cId, &wd, &de, &cf)
 
-		fmt.Println("&t,&rb, &cId,&wd, &de ", t, rb, cId, wd, de)
+		fmt.Println("&t,&rb, &cId,&wd, &de, &cf ", t, rb, cId, wd, de, cf)
 
 		if err != nil {
 			fmt.Println(err)
-			return "", false, -1, -1, -1, err
+			return "", false, -1, -1, -1, -1, err
 		}
 
-		return t, rb, cId, wd, de, nil
+		return t, rb, cId, wd, de, cf, nil
 	}
 
-	return t, rb, cId, wd, de, nil
+	return t, rb, cId, wd, de, cf, nil
+}
+
+func updateTransactionDB(tref transactionRef, rb rolledBack, cId callerId, wd withdraw, de deposit, cf chargeFreerounds) (e error) {
+
+	// default for test
+	// connection string
+
+	psqlconn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", host, port, user, password, dbname)
+
+	// open database
+	db, err := sql.Open("postgres", psqlconn)
+
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	// close database
+	defer db.Close()
+
+	// check db
+	err = db.Ping()
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	insertStmt := `update "transactions" set "rolledBack" = $1,"callerId" = $2,"withdraw" = $3,"deposit" = $4, "chargeFreerounds" = $5 where "transactionRef" = $6`
+	_, err = db.Exec(insertStmt, rb, cId, wd, de, cf, tref)
+
+	println("insertStmt")
+	println(insertStmt)
+
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	return nil
 }
 
 func updateBalanceDB(cId callerId, ba balance, fr freeRoundsLeft) error {

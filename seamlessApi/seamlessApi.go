@@ -7,7 +7,6 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
-	"sync"
 	"time"
 )
 
@@ -51,13 +50,6 @@ type chargeFreerounds int
 // rollbackTransaction parameters
 type roundId string
 
-type userBalancesContainer struct {
-	mutx                    sync.Mutex
-	userBalances            map[callerId]balance
-	userFreeRoundsRemaining map[callerId]freeRoundsLeft
-	transactionRefsList     map[transactionRef]rollbackStruct
-}
-
 type getBalanceParams struct {
 	//requred
 	CallerId   callerId   `json:"callerId"`
@@ -95,7 +87,7 @@ type rollbackStruct struct {
 	withdr      withdraw
 	dep         deposit
 	freeRndLeft chargeFreerounds
-	uId         callerId
+	cId         callerId
 }
 
 type rollbackTransactionParams struct {
@@ -190,8 +182,6 @@ type rollbackTransactionResponseParams struct {
 	Result result `json:"Result,omitempty"`
 }
 
-var uB userBalancesContainer
-
 func RandStringBytes(n int) string {
 	rand.Seed(time.Now().UnixNano())
 
@@ -202,13 +192,31 @@ func RandStringBytes(n int) string {
 	return string(b)
 }
 
-func (c *userBalancesContainer) rollbackBalance(uId callerId, wdraw withdraw, depo deposit, charge chargeFreerounds) (b balance, err bool) {
-	c.mutx.Lock()
-	defer c.mutx.Unlock()
-	c.userFreeRoundsRemaining[uId] += freeRoundsLeft(charge)
-	c.userBalances[uId] -= balance(depo)
-	c.userBalances[uId] += balance(wdraw)
-	return c.userBalances[uId], false
+func rollbackBalance(cId callerId, wdraw withdraw, depo deposit, charge chargeFreerounds, tr transactionRef) (e error) {
+
+	_, rb, cId, wi, de, cf, e := getTransactionDB(tr)
+	if e != nil {
+		e := fmt.Errorf("read transaction error")
+		return e
+	}
+	bal, fr, e := getBalanceDB(cId)
+	if e != nil {
+		e := fmt.Errorf("read balance  error")
+		return e
+	}
+	if rb {
+		e := fmt.Errorf("operation already rolled back")
+		return e
+	}
+
+	fr += freeRoundsLeft(cf)
+	bal -= balance(de)
+	bal += balance(wi)
+
+	updateBalanceDB(cId, bal, fr)
+	updateTransactionDB(tr, true, cId, wi, de, cf)
+
+	return nil
 }
 
 func GetBalance(body []byte, wdraw http.ResponseWriter) error {
@@ -266,20 +274,20 @@ func WithdrawAndDeposit(body []byte, wdraw http.ResponseWriter) (b balance, erro
 	cId := rbrpc.Params.CallerId
 	wd := rbrpc.Params.Withdraw
 	de := rbrpc.Params.Deposit
-	freeRndLeft := rbrpc.Params.ChargeFreerounds
 	tr := rbrpc.Params.TransactionRef
+	cf := rbrpc.Params.ChargeFreerounds
 
-	t, _, _, _, _, _ := getTransactionDB(tr)
+	t, _, _, _, _, _, _ := getTransactionDB(tr)
 	// если  подобный transactionRefs присутствует то выходим
 	if t == tr {
-		http.Error(wdraw, "Operation already Rolled Back", http.StatusBadRequest)
-		fmt.Println("Operation already Rolled Back")
+		http.Error(wdraw, "Operation was done and already Rolled Back", http.StatusBadRequest)
+		fmt.Println("Operation was done and already Rolled Back")
 		return
 	}
 
 	// если  подобный transactionRefs отсутствует то создаем
 
-	createTransactionDB(de, wd, false, tr, cId)
+	createTransactionDB(de, wd, false, tr, cId, cf)
 
 	// если ставка больше чем депозит то ошибка нет денег
 
@@ -329,7 +337,7 @@ func WithdrawAndDeposit(body []byte, wdraw http.ResponseWriter) (b balance, erro
 		return
 	}
 
-	gb, frl, er := calcBalance(cId, wd, de, freeRndLeft)
+	gb, frl, er := calcBalance(cId, wd, de, cf)
 
 	if er != nil {
 		http.Error(wdraw, er.Error(), http.StatusBadRequest)
@@ -348,7 +356,7 @@ func WithdrawAndDeposit(body []byte, wdraw http.ResponseWriter) (b balance, erro
 		},
 	}
 
-	if freeRndLeft > 0 {
+	if cf > 0 {
 		resp.Result = withdrawAndDepositResponseParams{
 			NewBalance:     gb,
 			TransactionId:  generatedTransId,
@@ -395,54 +403,61 @@ func calcBalance(cId callerId, wdraw withdraw, depo deposit, charge chargeFreero
 	return ba, freeRndLeft, e
 }
 
-func RollbackTransaction(body []byte, wdraw http.ResponseWriter) (b balance, error string) {
+func RollbackTransaction(body []byte, wdraw http.ResponseWriter) (error string) {
 
 	rbrpc := &rollbackTransactionRpc{}
 	err := json.Unmarshal(body, rbrpc)
 	if err != nil {
 		http.Error(wdraw, err.Error(), http.StatusBadRequest)
-		return
+		return err.Error()
 	}
 	tr := rbrpc.Params.TransactionRef
-	if _, ok := uB.transactionRefsList[tr]; !ok {
-		// если  подобный transactionRefs отсутствует то создаем и помечаем как откаченый
-		entry := rollbackStruct{}
-		entry.rolledBack = true
-		entry.tRef = tr
-		uB.transactionRefsList[tr] = entry
-	} else {
-		entry := uB.transactionRefsList[tr]
-		uB.rollbackBalance(entry.uId, entry.withdr, entry.dep, entry.freeRndLeft)
-		return
+	cId := rbrpc.Params.CallerId
+
+	t, _, _, wi, de, cf, e := getTransactionDB(tr)
+
+	if e != nil {
+		http.Error(wdraw, e.Error(), http.StatusBadRequest)
+
+		return e.Error()
 	}
-	userId := rbrpc.Params.CallerId
+
+	//В случае, если пришёл запрос rollbackTransaction с transactionRef,
+	//который ещё не был зарегистрирован в сервисе, нужно сохранить денежную транзакцию и пометить её, как откаченная
+
+	if t != tr {
+		createTransactionDB(0, 0, true, tr, cId, 0)
+		e := fmt.Errorf("no transactions found, marked as rolledBack:", tr)
+		fmt.Println("no transactions found, marked as rolledBack:", tr)
+
+		return e.Error()
+	}
+
+	rollbackBalance(cId, wi, de, cf, tr)
+
 	resp := rollbackTransactionResponse{
 		Jsonrpc: jsonrpc,
 		Method:  rollbackTransactionMethod,
-		Id:      id(userId),
+		Id:      id(cId),
 		Result:  rollbackTransactionResponseParams{},
 	}
 	wdraw.WriteHeader(http.StatusCreated)
 	wdraw.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		log.Fatalf("Error happened in JSON marshal. Err: %s", err)
+		return err.Error()
 	}
 	jsonResp, _ := json.Marshal(resp)
 	fmt.Println("jsonResp ", string(jsonResp))
-	_, e := wdraw.Write(jsonResp)
-	if e != nil {
-		fmt.Println("error", e)
+	_, er := wdraw.Write(jsonResp)
+	if er != nil {
+		fmt.Println("error", er)
+		return er.Error()
+
 	}
-	return b, "false"
+	return
 }
 func NewServer() {
-
-	uB = userBalancesContainer{
-		userBalances:            make(map[callerId]balance),
-		userFreeRoundsRemaining: make(map[callerId]freeRoundsLeft),
-		transactionRefsList:     make(map[transactionRef]rollbackStruct),
-	}
-
 	checkDb()
 	handler := http.HandlerFunc(handler)
 	http.Handle("/mascot/seamless", handler)
